@@ -1,0 +1,327 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+# Loading relevant libraries
+library(readxl)
+library(tidyverse)
+library(TTR) 
+library(forecast)
+```
+
+```{r}
+# Importing the death data from excel
+uk_death <- read_excel('Vital statistics in the UK.xlsx', sheet = 3, skip = 5)
+```
+
+```{r}
+# Checking the head of the data frame
+head(uk_death)
+```
+
+```{r}
+# Selecting columns needed (Year,Number of deaths: United Kingdom)
+death_uk <- uk_death %>% 
+  select(Year,`Number of deaths: United Kingdom`)
+```
+
+```{r}
+# Checking the first 6 entries.
+head(death_uk)
+```
+
+
+```{r}
+# Checking the last 6 entries.
+tail(death_uk)
+```
+Notice that some observations are ':'
+
+```{r}
+# Checking the structure of the data frame
+str(death_uk)
+```
+from the above, the 'Number of deaths: United Kingdom' column is stored as 'chr'
+
+```{r}
+# Cleaning and preparing the data for time series analysis.
+death_uk <- death_uk %>% 
+  rename(no_of_deaths =`Number of deaths: United Kingdom`) %>% 
+  filter(no_of_deaths != ':') %>% 
+  arrange(Year) %>% 
+  select(no_of_deaths)
+```
+
+```{r}
+# Converting the data to a time series 
+death_uk$no_of_deaths <- as.integer(death_uk$no_of_deaths)
+death_uk_ts = ts(death_uk, frequency = 1, start = 1887)
+death_uk_ts
+```
+
+```{r}
+# Plotting the initial number of deaths from year 1887 - 2021
+plot.ts(death_uk_ts, main='Time series of number of deaths in UK (1887 -2021)')
+```
+The time series appears non seasonal and can probably be described using an additive model.
+Time series is non seasonal, but has trend and irregular components.
+
+```{r}
+# Estimating trend by smoothing using a simple moving average of order 10.
+plot.ts(SMA(death_uk_ts, n=10), 
+        main='Time series showing trend of number of deaths in UK',
+        ylab = 'no of deaths (SMA)')
+```
+
+TIME SERIES MODELLING
+
+MODEL 1 -FORECASTING USING SMOOTHING
+The time series can be described by an additive model, it has trend with no seasonality, therefore:
+We can use Holt's Exponential Smoothing.
+
+```{r}
+# Fitting a predictive model using Holt-Winters
+death_uk_ts_forcast <- HoltWinters(death_uk_ts, gamma = FALSE)
+death_uk_ts_forcast
+```
+An alpha value approximately 0.48, is just right in the middle of 0 and 1, which means that 48% of the weight is given to the most recent observation when estimating the level. 
+A beta value of 0.15 means more weight (85%) is given to the previous trend estimate (not the most recent).
+
+```{r}
+# plotting both observed and fitted data from HoltWinters forecast.
+plot(death_uk_ts_forcast)
+```
+
+
+```{r}
+# forecasting the next 10 years.
+death_uk_ts_forcast2 <- forecast(death_uk_ts_forcast, h=10)
+plot(death_uk_ts_forcast2)
+```
+
+The forecast in blue.
+The purple area is the 80% prediction interval
+The grey area is the 95% prediction interval
+
+```{r}
+# forcasted data with the 80% and 85% intervals.
+death_uk_ts_forcast2
+```
+
+```{r}
+# Sum of square error
+death_uk_ts_forcast$SSE
+```
+
+```{r}
+# Root Mean Square Error for Holt-Winters
+RMSE_HW = sqrt(mean(death_uk_ts_forcast2$residuals^2, na.rm = TRUE))
+RMSE_HW
+```
+```{r}
+# Mean absolute percentage error MAPE for Holt-Winters
+MAPE_HW = mean((abs(death_uk_ts_forcast2$residuals/death_uk_ts)*100), na.rm=TRUE)
+MAPE_HW
+```
+
+
+```{r}
+# ACF and Ljung box test
+acf(death_uk_ts_forcast2$residuals, lag.max=20 , na.action = na.pass) 
+Box.test(death_uk_ts_forcast2$residuals, lag=20, type="Ljung-Box")
+```
+The P-value for the LJung-test is 0.055, there is little evidence of non-zero auto correlations in the in-sample forecast errors at lags 1-20. 
+
+```{r}
+#  plotting the forecast errors to check for constant variance
+plot.ts(death_uk_ts_forcast2$residuals, main='Holt-Winters Forecast Errors',
+        ylab = 'Residuals')
+```
+
+```{r}
+# function to plot forecast errors and overlay normal distributed data
+plotForecastErrors <- function(forecasterrors) 
+{ 
+# make a histogram of the forecast errors: 
+mybinsize <- IQR(forecasterrors)/4  
+mysd <- sd(forecasterrors) 
+mymin <- min(forecasterrors) - mysd*5  
+mymax <- max(forecasterrors) + mysd*3 
+# generate normally distributed data with mean 0 and standard deviation mysd 
+mynorm <- rnorm(10000, mean=0, sd=mysd) 
+mymin2 <- min(mynorm) 
+mymax2 <- max(mynorm) 
+if (mymin2 < mymin) { mymin <- mymin2 } 
+if (mymax2 > mymax) { mymax <- mymax2 } 
+# make a red histogram of the forecast errors, with the normally distributed data overlaid: 
+mybins <- seq(mymin, mymax, mybinsize) 
+hist(forecasterrors, col="red", freq=FALSE, breaks=mybins) 
+# freq=FALSE ensures the area under the histogram = 1 
+# generate normally distributed data with mean 0 and standard deviation mysd 
+myhist <- hist(mynorm, plot=FALSE, breaks=mybins) 
+# plot the normal curve as a blue line on top of the histogram of forecast errors: 
+points(myhist$mids, myhist$density, type="l", col="blue", lwd=2) 
+} 
+```
+
+```{r}
+# removing NA values from the residuals
+death_uk_ts_forcast2$residuals <- death_uk_ts_forcast2$residuals[!is.na(death_uk_ts_forcast2$residuals)]
+```
+
+```{r}
+# plotting if the forecast errors to check if normally distributed with mean zero
+plotForecastErrors(death_uk_ts_forcast2$residuals)
+```
+
+```{r}
+# library to import Augmented Dickey-Fuller Test
+library(tseries)
+```
+
+```{r}
+# Augmented Dickey-Fuller Test
+adf.test(death_uk_ts)
+```
+Test if series is stationary, P-value is greater than 0.05, therefore we fail to reject null hypothesis.
+
+```{r}
+# Differencing the time series to make it stationary
+death_uk_ts_diff1 <- diff(death_uk_ts, differences = 1)
+
+# Plotting the series with difference 1.
+plot(death_uk_ts_diff1, main='Time series of number of deaths in UK (DIFF 1)')
+```
+
+The plot appears stationary in mean
+```{r}
+# Augmented Dickey-Fuller Test for difference 1
+adf.test(death_uk_ts_diff1)
+```
+Test if series is stationary, P-value is less than 0.05, therefore we reject null hypothesis.
+Difference 1 is stationary.
+
+
+
+SELECTING ARIMA MODEL.
+```{r}
+# Plotting the correlogram for diff1
+acf(death_uk_ts_diff1, lag.max = 20)
+acf(death_uk_ts_diff1, lag.max = 20, plot = FALSE)
+```
+from the correlogram, the autocorrelation at lag 1 (-0.446) exceeds the significance bounds. so a Moving average model of order 1 - ARMA(0,1) can be used 
+which is also a ARIMA(0,1,1) with difference 1.
+
+```{r}
+# Plotting the partial correlogram for diff1
+pacf(death_uk_ts_diff1, lag.max = 20)
+pacf(death_uk_ts_diff1, lag.max = 20, plot = FALSE)
+
+```
+The partial autocorrelation at lags 1,2,and 3 exceeds the significance bounds.
+an Auto regressive model of order 3 is possible. ARIMA(3,1,0)
+
+
+From the principle of parsimony (fewer is better).
+
+
+MODEL 2 - MOVING AVERAGE MODEL OF ORDER 1 - ARIMA(0,1,1)
+```{r}
+# Moving average model of order 1 and difference 1.
+death_uk_ts_ma <- arima(death_uk_ts, order = c(0,1,1))
+death_uk_ts_ma
+```
+
+```{r}
+# forecasting the next 10 years using moving average.
+death_uk_ts_ma_forecast <- forecast(death_uk_ts_ma, h =10)
+death_uk_ts_ma_forecast
+```
+
+```{r}
+# 10 year forecast plot
+plot(death_uk_ts_ma_forecast)
+```
+
+```{r}
+# Evaluation for ARIMA(0,1,1) 
+AIC(death_uk_ts_ma)
+BIC(death_uk_ts_ma)
+accuracy(death_uk_ts_ma)
+```
+
+
+```{r}
+# ACF and Ljung box test
+acf(death_uk_ts_ma_forecast$residuals, lag.max=20 , na.action = na.pass) 
+Box.test(death_uk_ts_ma_forecast$residuals, lag=20, type="Ljung-Box")
+```
+The P-value for the LJung-test is 0.052, there is little evidence of non-zero auto correlations in the forecast errors at lags 1-20.
+
+```{r}
+#  plotting the forecast errors to check for constant variance
+plot.ts(death_uk_ts_ma_forecast$residuals, main = 'ARIMA(0,1,1) Forecast Errors',
+        ylab = 'Residuals')
+```
+
+Appears to have mean 0 and constant Variance
+
+```{r}
+# plotting if the forecast errors to check if normally distributed with mean zero
+plotForecastErrors(death_uk_ts_ma_forecast$residuals)
+```
+
+Appears normally distributed with mean 0
+
+
+
+MODEL 3 - ARIMA(3,1,0)
+```{r}
+# ARIMA model (3,1,0)
+death_uk_ts_ar <- arima(death_uk_ts, order = c(3,1,0))
+death_uk_ts_ar
+```
+
+```{r}
+# forecasting the next 10 years.
+death_uk_ts_ar_forecast <- forecast(death_uk_ts_ar, h =10)
+death_uk_ts_ar_forecast
+```
+
+```{r}
+# 10 year forecast plot
+plot(death_uk_ts_ar_forecast)
+```
+
+```{r}
+# Evaluation for ARIMA(3,1,0) 
+AIC(death_uk_ts_ar)
+BIC(death_uk_ts_ar)
+accuracy(death_uk_ts_ar)
+```
+
+
+```{r}
+# ACF and Ljung box test
+acf(death_uk_ts_ar_forecast$residuals, lag.max=20 , na.action = na.pass) 
+Box.test(death_uk_ts_ar_forecast$residuals, lag=20, type="Ljung-Box")
+```
+The P-value for the LJung-test is 0.057, there is little evidence of non-zero auto correlations in the forecast errors at lags 1-20.
+
+
+```{r}
+# plotting the forecast errors to check for constant variance
+plot.ts(death_uk_ts_ar_forecast$residuals,main ='ARIMA(3,1,0) Forecast Errors',
+        ylab = 'Residuals')
+```
+
+```{r}
+# plotting if the forecast errors to check if normally distributed with mean zero
+plotForecastErrors(death_uk_ts_ar_forecast$residuals)
+```
+
+
+
